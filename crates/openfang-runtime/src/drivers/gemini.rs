@@ -50,6 +50,40 @@ struct GeminiRequest {
     tools: Vec<GeminiToolConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     generation_config: Option<GenerationConfig>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    safety_settings: Vec<GeminiSafetySetting>,
+}
+
+/// Safety setting to control Gemini content filtering thresholds.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GeminiSafetySetting {
+    category: &'static str,
+    threshold: &'static str,
+}
+
+/// Default safety settings: block only high-probability harmful content.
+/// This prevents false positives on legitimate professional content
+/// (e.g., environmental reports mentioning chemicals, contamination).
+fn default_safety_settings() -> Vec<GeminiSafetySetting> {
+    vec![
+        GeminiSafetySetting {
+            category: "HARM_CATEGORY_HARASSMENT",
+            threshold: "BLOCK_ONLY_HIGH",
+        },
+        GeminiSafetySetting {
+            category: "HARM_CATEGORY_HATE_SPEECH",
+            threshold: "BLOCK_ONLY_HIGH",
+        },
+        GeminiSafetySetting {
+            category: "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+            threshold: "BLOCK_ONLY_HIGH",
+        },
+        GeminiSafetySetting {
+            category: "HARM_CATEGORY_DANGEROUS_CONTENT",
+            threshold: "BLOCK_ONLY_HIGH",
+        },
+    ]
 }
 
 /// A content entry (user/model turn).
@@ -305,6 +339,10 @@ fn convert_response(resp: GeminiResponse) -> Result<CompletionResponse, LlmError
     let mut content = Vec::new();
     let mut tool_calls = Vec::new();
 
+    if candidate.finish_reason.as_deref() == Some("SAFETY") {
+        warn!("Gemini response blocked by safety filter (finishReason=SAFETY)");
+    }
+
     if let Some(gemini_content) = candidate.content {
         for part in gemini_content.parts {
             match part {
@@ -376,6 +414,7 @@ impl LlmDriver for GeminiDriver {
                 temperature: Some(request.temperature),
                 max_output_tokens: Some(request.max_tokens),
             }),
+            safety_settings: default_safety_settings(),
         };
 
         let max_retries = 3;
@@ -456,6 +495,7 @@ impl LlmDriver for GeminiDriver {
                 temperature: Some(request.temperature),
                 max_output_tokens: Some(request.max_tokens),
             }),
+            safety_settings: default_safety_settings(),
         };
 
         let max_retries = 3;
@@ -518,9 +558,13 @@ impl LlmDriver for GeminiDriver {
             let mut byte_stream = resp.bytes_stream();
             while let Some(chunk_result) = byte_stream.next().await {
                 let chunk = chunk_result.map_err(|e| LlmError::Http(e.to_string()))?;
-                buffer.push_str(&String::from_utf8_lossy(&chunk));
+                // Normalize \r\n → \n so the event delimiter is always \n\n
+                // (Gemini may send \r\n line endings, making the separator \r\n\r\n
+                //  which would never match a plain \n\n search.)
+                let chunk_str = String::from_utf8_lossy(&chunk);
+                buffer.push_str(&chunk_str.replace("\r\n", "\n").replace('\r', "\n"));
 
-                // Process complete SSE events (delimited by \n\n or \r\n\r\n)
+                // Process complete SSE events (delimited by \n\n)
                 while let Some(pos) = buffer.find("\n\n") {
                     let event_text = buffer[..pos].to_string();
                     buffer = buffer[pos + 2..].to_string();
@@ -537,7 +581,10 @@ impl LlmDriver for GeminiDriver {
 
                     let json: GeminiResponse = match serde_json::from_str(data) {
                         Ok(v) => v,
-                        Err(_) => continue,
+                        Err(e) => {
+                            debug!("Gemini SSE JSON parse error: {e}");
+                            continue;
+                        }
                     };
 
                     // Extract usage from each chunk (last one wins)
@@ -592,6 +639,59 @@ impl LlmDriver for GeminiDriver {
                                 }
                             }
                         }
+                    }
+                }
+            }
+
+            // Fallback: if the SSE parser yielded nothing, try parsing leftover
+            // buffer as a plain JSON response (some Gemini endpoints may not send
+            // SSE-framed data, or the entire response may arrive as a single chunk
+            // without the expected blank-line delimiter at the end).
+            if text_content.is_empty() && fn_calls.is_empty() && !buffer.trim().is_empty() {
+                debug!(
+                    buffer_len = buffer.len(),
+                    "SSE parser found no events; trying raw JSON fallback"
+                );
+                // Strip any leftover "data: " prefix in case of a single un-terminated event
+                let raw = buffer
+                    .lines()
+                    .find_map(|line| line.strip_prefix("data: "))
+                    .unwrap_or(buffer.trim());
+                if let Ok(json) = serde_json::from_str::<GeminiResponse>(raw) {
+                    if let Some(ref u) = json.usage_metadata {
+                        usage.input_tokens = u.prompt_token_count;
+                        usage.output_tokens = u.candidates_token_count;
+                    }
+                    for candidate in &json.candidates {
+                        if let Some(fr) = &candidate.finish_reason {
+                            finish_reason = Some(fr.clone());
+                        }
+                        if let Some(ref c) = candidate.content {
+                            for part in &c.parts {
+                                match part {
+                                    GeminiPart::Text { text } => {
+                                        if !text.is_empty() {
+                                            text_content.push_str(text);
+                                            let _ = tx
+                                                .send(StreamEvent::TextDelta {
+                                                    text: text.clone(),
+                                                })
+                                                .await;
+                                        }
+                                    }
+                                    GeminiPart::FunctionCall { function_call } => {
+                                        fn_calls.push((
+                                            function_call.name.clone(),
+                                            function_call.args.clone(),
+                                        ));
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
+                    if !text_content.is_empty() || !fn_calls.is_empty() {
+                        debug!("Raw JSON fallback recovered response content");
                     }
                 }
             }
@@ -685,6 +785,7 @@ mod tests {
                 temperature: Some(0.7),
                 max_output_tokens: Some(1024),
             }),
+            safety_settings: default_safety_settings(),
         };
 
         let json = serde_json::to_value(&req).unwrap();

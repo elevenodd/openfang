@@ -4050,45 +4050,86 @@ impl OpenFangKernel {
         }
 
         // Add MCP tools (filtered by agent's MCP server allowlist)
-        if let Ok(mcp_tools) = self.mcp_tools.lock() {
-            if mcp_allowlist.is_empty() {
-                all_tools.extend(mcp_tools.iter().cloned());
-            } else {
-                // Normalize allowlist names for matching
-                let normalized: Vec<String> = mcp_allowlist
-                    .iter()
-                    .map(|s| openfang_runtime::mcp::normalize_name(s))
-                    .collect();
-                all_tools.extend(
-                    mcp_tools
-                        .iter()
-                        .filter(|t| {
-                            openfang_runtime::mcp::extract_mcp_server(&t.name)
-                                .map(|s| normalized.iter().any(|n| n == s))
-                                .unwrap_or(false)
-                        })
-                        .cloned(),
+        match self.mcp_tools.lock() {
+            Ok(mcp_tools) => {
+                debug!(
+                    cached_mcp_tools = mcp_tools.len(),
+                    agent_mcp_allowlist = ?mcp_allowlist,
+                    "MCP tool injection"
                 );
+                if mcp_allowlist.is_empty() {
+                    all_tools.extend(mcp_tools.iter().cloned());
+                } else {
+                    let before = all_tools.len();
+                    all_tools.extend(
+                        mcp_tools
+                            .iter()
+                            .filter(|t| {
+                                mcp_allowlist.iter().any(|server| {
+                                    openfang_runtime::mcp::tool_matches_server(
+                                        &t.name, server,
+                                    )
+                                })
+                            })
+                            .cloned(),
+                    );
+                    debug!(
+                        added = all_tools.len() - before,
+                        allowlist = ?mcp_allowlist,
+                        "MCP tools added after filtering"
+                    );
+                }
+            }
+            Err(e) => {
+                warn!("mcp_tools mutex poisoned: {e}");
             }
         }
 
         let caps = self.capabilities.list(agent_id);
+
+        // Count MCP tools before filtering (debug)
+        let mcp_count_before = all_tools
+            .iter()
+            .filter(|t| openfang_runtime::mcp::is_mcp_tool(&t.name))
+            .count();
+        debug!(
+            agent = %agent_id,
+            total = all_tools.len(),
+            mcp = mcp_count_before,
+            "available_tools: before capability filter"
+        );
 
         // If agent has ToolAll, return all tools
         if caps.iter().any(|c| matches!(c, Capability::ToolAll)) {
             return all_tools;
         }
 
-        // Filter to tools the agent has capability for
-        all_tools
+        // Filter to tools the agent has capability for.
+        // MCP tools bypass this check — they were already filtered by the
+        // agent's mcp_servers allowlist above (lines 4052-4072).
+        let result: Vec<_> = all_tools
             .into_iter()
             .filter(|tool| {
-                caps.iter().any(|c| match c {
-                    Capability::ToolInvoke(name) => name == &tool.name || name == "*",
-                    _ => false,
-                })
+                openfang_runtime::mcp::is_mcp_tool(&tool.name)
+                    || caps.iter().any(|c| match c {
+                        Capability::ToolInvoke(name) => name == &tool.name || name == "*",
+                        _ => false,
+                    })
             })
-            .collect()
+            .collect();
+
+        let mcp_count_after = result
+            .iter()
+            .filter(|t| openfang_runtime::mcp::is_mcp_tool(&t.name))
+            .count();
+        debug!(
+            agent = %agent_id,
+            total = result.len(),
+            mcp = mcp_count_after,
+            "available_tools: after capability filter"
+        );
+
+        result
     }
 
     /// Collect prompt context from prompt-only skills for system prompt injection.

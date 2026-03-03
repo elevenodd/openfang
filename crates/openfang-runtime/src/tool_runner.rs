@@ -378,23 +378,25 @@ pub async fn execute_tool(
             // Fallback 1: MCP tools (mcp_{server}_{tool} prefix)
             if mcp::is_mcp_tool(other) {
                 if let Some(mcp_conns) = mcp_connections {
-                    if let Some(server_name) = mcp::extract_mcp_server(other) {
-                        let mut conns = mcp_conns.lock().await;
-                        if let Some(conn) = conns.iter_mut().find(|c| c.name() == server_name) {
-                            debug!(
-                                tool = other,
-                                server = server_name,
-                                "Dispatching to MCP server"
-                            );
-                            match conn.call_tool(other, input).await {
-                                Ok(content) => Ok(content),
-                                Err(e) => Err(format!("MCP tool call failed: {e}")),
-                            }
-                        } else {
-                            Err(format!("MCP server '{server_name}' not connected"))
+                    let mut conns = mcp_conns.lock().await;
+                    // Find the connection whose server name matches the tool prefix.
+                    // Use prefix matching (tool_matches_server) because server names
+                    // with hyphens are normalized to underscores, making the old
+                    // extract_mcp_server approach ambiguous for multi-word names.
+                    if let Some(conn) = conns.iter_mut().find(|c| {
+                        mcp::tool_matches_server(other, c.name())
+                    }) {
+                        debug!(
+                            tool = other,
+                            server = conn.name(),
+                            "Dispatching to MCP server"
+                        );
+                        match conn.call_tool(other, input).await {
+                            Ok(content) => Ok(content),
+                            Err(e) => Err(format!("MCP tool call failed: {e}")),
                         }
                     } else {
-                        Err(format!("Invalid MCP tool name: {other}"))
+                        Err(format!("No MCP server found for tool: {other}"))
                     }
                 } else {
                     Err(format!("MCP not available for tool: {other}"))

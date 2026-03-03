@@ -399,16 +399,34 @@ impl McpConnection {
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::piped());
 
-        // Sandbox: clear environment, only pass whitelisted vars
-        cmd.env_clear();
+        // Environment sandboxing strategy:
+        // On Windows, env_clear() breaks Node.js v22+ (CSPRNG assertion failure)
+        // because the crypto subsystem needs internal OS state that cannot be
+        // restored via env vars alone.  On Unix we can safely clear and whitelist.
+        #[cfg(not(target_os = "windows"))]
+        {
+            cmd.env_clear();
+
+            const SYSTEM_VARS: &[&str] = &[
+                "PATH", "HOME", "LANG", "TERM", "SHELL",
+                "TMPDIR", "XDG_RUNTIME_DIR",
+            ];
+
+            for var_name in SYSTEM_VARS {
+                if let Ok(val) = std::env::var(var_name) {
+                    cmd.env(var_name, val);
+                }
+            }
+        }
+
+        // On Windows: inherit full environment (safe — MCP servers are local).
+        // Only add user-specified env whitelist vars on top.
+
+        // Pass user-specified env whitelist (both platforms)
         for var_name in env_whitelist {
             if let Ok(val) = std::env::var(var_name) {
                 cmd.env(var_name, val);
             }
-        }
-        // Always pass PATH for binary resolution
-        if let Ok(path) = std::env::var("PATH") {
-            cmd.env("PATH", path);
         }
 
         let mut child = cmd
@@ -474,12 +492,26 @@ pub fn is_mcp_tool(name: &str) -> bool {
 }
 
 /// Extract server name from an MCP tool name.
+///
+/// NOTE: This only works for single-word server names (e.g. "github").
+/// For multi-word names like "terra-training" (normalized to "terra_training"),
+/// the underscore delimiter is ambiguous. Prefer [`tool_matches_server`] instead.
 pub fn extract_mcp_server(tool_name: &str) -> Option<&str> {
     if !tool_name.starts_with("mcp_") {
         return None;
     }
     let rest = &tool_name[4..];
     rest.find('_').map(|pos| &rest[..pos])
+}
+
+/// Check if an MCP tool name belongs to a given server.
+///
+/// Uses prefix matching: tool `mcp_terra_training_read_file` matches
+/// server `terra-training` (normalized to `terra_training`).
+/// This is reliable even for multi-word server names.
+pub fn tool_matches_server(tool_name: &str, server_name: &str) -> bool {
+    let prefix = format!("mcp_{}_", normalize_name(server_name));
+    tool_name.starts_with(&prefix)
 }
 
 /// Strip the MCP namespace prefix from a tool name.
@@ -523,6 +555,24 @@ mod tests {
             Some("github")
         );
         assert_eq!(extract_mcp_server("file_read"), None);
+    }
+
+    #[test]
+    fn test_tool_matches_server() {
+        // Single-word server name
+        assert!(tool_matches_server("mcp_github_create_issue", "github"));
+        // Multi-word server name with hyphens (the bug case)
+        assert!(tool_matches_server(
+            "mcp_terra_training_list_directory",
+            "terra-training"
+        ));
+        assert!(tool_matches_server(
+            "mcp_onedrive_nes_read_file",
+            "onedrive-nes"
+        ));
+        // Non-matching
+        assert!(!tool_matches_server("mcp_github_create_issue", "gitlab"));
+        assert!(!tool_matches_server("file_read", "github"));
     }
 
     #[test]
