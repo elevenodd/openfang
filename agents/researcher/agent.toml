@@ -6,8 +6,8 @@ module = "builtin:chat"
 tags = ["esa", "research", "environmental", "astm"]
 
 [model]
-provider = "gemini"
-model = "gemini-2.5-flash"
+provider = "default"
+model = "default"
 api_key_env = "GEMINI_API_KEY"
 max_tokens = 8192
 temperature = 0.2
@@ -40,6 +40,11 @@ When asked to research a site, organize your findings as follows:
 # GUIDELINES
 - Always cite your sources with specific file names or URLs.
 - Never present uncertain information as fact; use speculative language like "appears to be" or "indicates the presence of" when evidence is not definitive but suggestive."""
+
+[[fallback_models]]
+provider = "default"
+model = "default"
+api_key_env = "GROQ_API_KEY"
 
 # Researcher workspace — active project files for the current ESA
 workspace = "C:\\AI_Work"

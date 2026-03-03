@@ -1050,7 +1050,7 @@ pub async fn send_message_stream(
 // ---------------------------------------------------------------------------
 
 /// Field type for the channel configuration form.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 enum FieldType {
     Secret,
     Text,
@@ -1763,12 +1763,16 @@ fn is_channel_configured(config: &openfang_types::config::ChannelsConfig, name: 
 }
 
 /// Build a JSON field descriptor, checking env var presence but never exposing secrets.
-fn build_field_json(f: &ChannelField) -> serde_json::Value {
+/// For non-secret fields, includes the actual config value from `config_values` if available.
+fn build_field_json(
+    f: &ChannelField,
+    config_values: Option<&serde_json::Value>,
+) -> serde_json::Value {
     let has_value = f
         .env_var
         .map(|ev| std::env::var(ev).map(|v| !v.is_empty()).unwrap_or(false))
         .unwrap_or(false);
-    serde_json::json!({
+    let mut field = serde_json::json!({
         "key": f.key,
         "label": f.label,
         "type": f.field_type.as_str(),
@@ -1777,12 +1781,96 @@ fn build_field_json(f: &ChannelField) -> serde_json::Value {
         "has_value": has_value,
         "placeholder": f.placeholder,
         "advanced": f.advanced,
-    })
+    });
+    // For non-secret fields, include the actual saved config value so the
+    // dashboard can pre-populate forms when editing existing configs.
+    if f.env_var.is_none() {
+        if let Some(obj) = config_values.and_then(|v| v.as_object()) {
+            if let Some(val) = obj.get(f.key) {
+                // Convert arrays to comma-separated string for list fields
+                let display_val = if f.field_type == FieldType::List {
+                    if let Some(arr) = val.as_array() {
+                        serde_json::Value::String(
+                            arr.iter()
+                                .filter_map(|v| {
+                                    v.as_str()
+                                        .map(|s| s.to_string())
+                                        .or_else(|| Some(v.to_string()))
+                                })
+                                .collect::<Vec<_>>()
+                                .join(", "),
+                        )
+                    } else {
+                        val.clone()
+                    }
+                } else {
+                    val.clone()
+                };
+                field["value"] = display_val;
+                if !val.is_null()
+                    && val.as_str().map(|s| !s.is_empty()).unwrap_or(true)
+                {
+                    field["has_value"] = serde_json::Value::Bool(true);
+                }
+            }
+        }
+    }
+    field
 }
 
 /// Find a channel definition by name.
 fn find_channel_meta(name: &str) -> Option<&'static ChannelMeta> {
     CHANNEL_REGISTRY.iter().find(|c| c.name == name)
+}
+
+/// Serialize a channel's config to a JSON Value for pre-populating dashboard forms.
+fn channel_config_values(
+    config: &openfang_types::config::ChannelsConfig,
+    name: &str,
+) -> Option<serde_json::Value> {
+    match name {
+        "telegram" => config.telegram.as_ref().and_then(|c| serde_json::to_value(c).ok()),
+        "discord" => config.discord.as_ref().and_then(|c| serde_json::to_value(c).ok()),
+        "slack" => config.slack.as_ref().and_then(|c| serde_json::to_value(c).ok()),
+        "whatsapp" => config.whatsapp.as_ref().and_then(|c| serde_json::to_value(c).ok()),
+        "signal" => config.signal.as_ref().and_then(|c| serde_json::to_value(c).ok()),
+        "matrix" => config.matrix.as_ref().and_then(|c| serde_json::to_value(c).ok()),
+        "email" => config.email.as_ref().and_then(|c| serde_json::to_value(c).ok()),
+        "teams" => config.teams.as_ref().and_then(|c| serde_json::to_value(c).ok()),
+        "mattermost" => config.mattermost.as_ref().and_then(|c| serde_json::to_value(c).ok()),
+        "irc" => config.irc.as_ref().and_then(|c| serde_json::to_value(c).ok()),
+        "google_chat" => config.google_chat.as_ref().and_then(|c| serde_json::to_value(c).ok()),
+        "twitch" => config.twitch.as_ref().and_then(|c| serde_json::to_value(c).ok()),
+        "rocketchat" => config.rocketchat.as_ref().and_then(|c| serde_json::to_value(c).ok()),
+        "zulip" => config.zulip.as_ref().and_then(|c| serde_json::to_value(c).ok()),
+        "xmpp" => config.xmpp.as_ref().and_then(|c| serde_json::to_value(c).ok()),
+        "line" => config.line.as_ref().and_then(|c| serde_json::to_value(c).ok()),
+        "viber" => config.viber.as_ref().and_then(|c| serde_json::to_value(c).ok()),
+        "messenger" => config.messenger.as_ref().and_then(|c| serde_json::to_value(c).ok()),
+        "reddit" => config.reddit.as_ref().and_then(|c| serde_json::to_value(c).ok()),
+        "mastodon" => config.mastodon.as_ref().and_then(|c| serde_json::to_value(c).ok()),
+        "bluesky" => config.bluesky.as_ref().and_then(|c| serde_json::to_value(c).ok()),
+        "feishu" => config.feishu.as_ref().and_then(|c| serde_json::to_value(c).ok()),
+        "revolt" => config.revolt.as_ref().and_then(|c| serde_json::to_value(c).ok()),
+        "nextcloud" => config.nextcloud.as_ref().and_then(|c| serde_json::to_value(c).ok()),
+        "guilded" => config.guilded.as_ref().and_then(|c| serde_json::to_value(c).ok()),
+        "keybase" => config.keybase.as_ref().and_then(|c| serde_json::to_value(c).ok()),
+        "threema" => config.threema.as_ref().and_then(|c| serde_json::to_value(c).ok()),
+        "nostr" => config.nostr.as_ref().and_then(|c| serde_json::to_value(c).ok()),
+        "webex" => config.webex.as_ref().and_then(|c| serde_json::to_value(c).ok()),
+        "pumble" => config.pumble.as_ref().and_then(|c| serde_json::to_value(c).ok()),
+        "flock" => config.flock.as_ref().and_then(|c| serde_json::to_value(c).ok()),
+        "twist" => config.twist.as_ref().and_then(|c| serde_json::to_value(c).ok()),
+        "mumble" => config.mumble.as_ref().and_then(|c| serde_json::to_value(c).ok()),
+        "dingtalk" => config.dingtalk.as_ref().and_then(|c| serde_json::to_value(c).ok()),
+        "discourse" => config.discourse.as_ref().and_then(|c| serde_json::to_value(c).ok()),
+        "gitter" => config.gitter.as_ref().and_then(|c| serde_json::to_value(c).ok()),
+        "ntfy" => config.ntfy.as_ref().and_then(|c| serde_json::to_value(c).ok()),
+        "gotify" => config.gotify.as_ref().and_then(|c| serde_json::to_value(c).ok()),
+        "webhook" => config.webhook.as_ref().and_then(|c| serde_json::to_value(c).ok()),
+        "linkedin" => config.linkedin.as_ref().and_then(|c| serde_json::to_value(c).ok()),
+        _ => None,
+    }
 }
 
 /// GET /api/channels — List all 40 channel adapters with status and field metadata.
@@ -1810,7 +1898,12 @@ pub async fn list_channels(State(state): State<Arc<AppState>>) -> impl IntoRespo
                     .unwrap_or(true)
             });
 
-        let fields: Vec<serde_json::Value> = meta.fields.iter().map(build_field_json).collect();
+        let config_vals = channel_config_values(&live_channels, meta.name);
+        let fields: Vec<serde_json::Value> = meta
+            .fields
+            .iter()
+            .map(|f| build_field_json(f, config_vals.as_ref()))
+            .collect();
 
         channels.push(serde_json::json!({
             "name": meta.name,
@@ -1866,7 +1959,7 @@ pub async fn configure_channel(
     let home = openfang_kernel::config::openfang_home();
     let secrets_path = home.join("secrets.env");
     let config_path = home.join("config.toml");
-    let mut config_fields: HashMap<String, String> = HashMap::new();
+    let mut config_fields: HashMap<String, (String, FieldType)> = HashMap::new();
 
     for field_def in meta.fields {
         let value = fields
@@ -1890,8 +1983,8 @@ pub async fn configure_channel(
                 std::env::set_var(env_var, value);
             }
         } else {
-            // Config field — collect for TOML write
-            config_fields.insert(field_def.key.to_string(), value.to_string());
+            // Config field — collect for TOML write with type info
+            config_fields.insert(field_def.key.to_string(), (value.to_string(), field_def.field_type));
         }
     }
 
@@ -2362,19 +2455,14 @@ pub async fn get_template(Path(name): Path<String>) -> impl IntoResponse {
 // ---------------------------------------------------------------------------
 
 /// GET /api/memory/agents/:id/kv — List KV pairs for an agent.
+///
+/// Note: memory_store tool writes to a shared namespace, so we read from that
+/// same namespace regardless of which agent ID is in the URL.
 pub async fn get_agent_kv(
     State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
+    Path(_id): Path<String>,
 ) -> impl IntoResponse {
-    let agent_id: AgentId = match id.parse() {
-        Ok(id) => id,
-        Err(_) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Invalid agent ID"})),
-            );
-        }
-    };
+    let agent_id = openfang_kernel::kernel::shared_memory_agent_id();
 
     match state.kernel.memory.list_kv(agent_id) {
         Ok(pairs) => {
@@ -2385,7 +2473,7 @@ pub async fn get_agent_kv(
             (StatusCode::OK, Json(serde_json::json!({"kv_pairs": kv})))
         }
         Err(e) => {
-            tracing::warn!("Memory list_kv failed for agent {id}: {e}");
+            tracing::warn!("Memory list_kv failed: {e}");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({"error": "Memory operation failed"})),
@@ -2397,17 +2485,9 @@ pub async fn get_agent_kv(
 /// GET /api/memory/agents/:id/kv/:key — Get a specific KV value.
 pub async fn get_agent_kv_key(
     State(state): State<Arc<AppState>>,
-    Path((id, key)): Path<(String, String)>,
+    Path((_id, key)): Path<(String, String)>,
 ) -> impl IntoResponse {
-    let agent_id: AgentId = match id.parse() {
-        Ok(id) => id,
-        Err(_) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Invalid agent ID"})),
-            );
-        }
-    };
+    let agent_id = openfang_kernel::kernel::shared_memory_agent_id();
 
     match state.kernel.memory.structured_get(agent_id, &key) {
         Ok(Some(val)) => (
@@ -2419,7 +2499,7 @@ pub async fn get_agent_kv_key(
             Json(serde_json::json!({"error": "Key not found"})),
         ),
         Err(e) => {
-            tracing::warn!("Memory get failed for agent {id}, key '{key}': {e}");
+            tracing::warn!("Memory get failed for key '{key}': {e}");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({"error": "Memory operation failed"})),
@@ -2431,18 +2511,10 @@ pub async fn get_agent_kv_key(
 /// PUT /api/memory/agents/:id/kv/:key — Set a KV value.
 pub async fn set_agent_kv_key(
     State(state): State<Arc<AppState>>,
-    Path((id, key)): Path<(String, String)>,
+    Path((_id, key)): Path<(String, String)>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    let agent_id: AgentId = match id.parse() {
-        Ok(id) => id,
-        Err(_) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Invalid agent ID"})),
-            );
-        }
-    };
+    let agent_id = openfang_kernel::kernel::shared_memory_agent_id();
 
     let value = body.get("value").cloned().unwrap_or(body);
 
@@ -2452,7 +2524,7 @@ pub async fn set_agent_kv_key(
             Json(serde_json::json!({"status": "stored", "key": key})),
         ),
         Err(e) => {
-            tracing::warn!("Memory set failed for agent {id}, key '{key}': {e}");
+            tracing::warn!("Memory set failed for key '{key}': {e}");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({"error": "Memory operation failed"})),
@@ -2464,17 +2536,9 @@ pub async fn set_agent_kv_key(
 /// DELETE /api/memory/agents/:id/kv/:key — Delete a KV value.
 pub async fn delete_agent_kv_key(
     State(state): State<Arc<AppState>>,
-    Path((id, key)): Path<(String, String)>,
+    Path((_id, key)): Path<(String, String)>,
 ) -> impl IntoResponse {
-    let agent_id: AgentId = match id.parse() {
-        Ok(id) => id,
-        Err(_) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Invalid agent ID"})),
-            );
-        }
-    };
+    let agent_id = openfang_kernel::kernel::shared_memory_agent_id();
 
     match state.kernel.memory.structured_delete(agent_id, &key) {
         Ok(()) => (
@@ -2482,7 +2546,7 @@ pub async fn delete_agent_kv_key(
             Json(serde_json::json!({"status": "deleted", "key": key})),
         ),
         Err(e) => {
-            tracing::warn!("Memory delete failed for agent {id}, key '{key}': {e}");
+            tracing::warn!("Memory delete failed for key '{key}': {e}");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({"error": "Memory operation failed"})),
@@ -3521,6 +3585,42 @@ pub async fn install_hand_deps(
     )
 }
 
+/// POST /api/hands/install — Install a hand from TOML content.
+pub async fn install_hand(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let toml_content = body["toml_content"].as_str().unwrap_or("");
+    let skill_content = body["skill_content"].as_str().unwrap_or("");
+
+    if toml_content.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Missing toml_content field"})),
+        );
+    }
+
+    match state
+        .kernel
+        .hand_registry
+        .install_from_content(toml_content, skill_content)
+    {
+        Ok(def) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "id": def.id,
+                "name": def.name,
+                "description": def.description,
+                "category": format!("{:?}", def.category),
+            })),
+        ),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": format!("{e}")})),
+        ),
+    }
+}
+
 /// POST /api/hands/{hand_id}/activate — Activate a hand (spawns agent).
 pub async fn activate_hand(
     State(state): State<Arc<AppState>>,
@@ -3530,17 +3630,36 @@ pub async fn activate_hand(
     let config = body.map(|b| b.0.config).unwrap_or_default();
 
     match state.kernel.activate_hand(&hand_id, config) {
-        Ok(instance) => (
-            StatusCode::OK,
-            Json(serde_json::json!({
-                "instance_id": instance.instance_id,
-                "hand_id": instance.hand_id,
-                "status": format!("{}", instance.status),
-                "agent_id": instance.agent_id.map(|a| a.to_string()),
-                "agent_name": instance.agent_name,
-                "activated_at": instance.activated_at.to_rfc3339(),
-            })),
-        ),
+        Ok(instance) => {
+            // If the hand agent has a non-reactive schedule (autonomous hands),
+            // start its background loop so it begins running immediately.
+            if let Some(agent_id) = instance.agent_id {
+                let entry = state.kernel.registry.list().into_iter().find(|e| e.id == agent_id);
+                if let Some(entry) = entry {
+                    if !matches!(
+                        entry.manifest.schedule,
+                        openfang_types::agent::ScheduleMode::Reactive
+                    ) {
+                        state.kernel.start_background_for_agent(
+                            agent_id,
+                            &entry.name,
+                            &entry.manifest.schedule,
+                        );
+                    }
+                }
+            }
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "instance_id": instance.instance_id,
+                    "hand_id": instance.hand_id,
+                    "status": format!("{}", instance.status),
+                    "agent_id": instance.agent_id.map(|a| a.to_string()),
+                    "agent_name": instance.agent_name,
+                    "activated_at": instance.activated_at.to_rfc3339(),
+                })),
+            )
+        }
         Err(e) => (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": format!("{e}")})),
@@ -6640,7 +6759,7 @@ fn remove_secret_env(path: &std::path::Path, key: &str) -> Result<(), std::io::E
 fn upsert_channel_config(
     config_path: &std::path::Path,
     channel_name: &str,
-    fields: &HashMap<String, String>,
+    fields: &HashMap<String, (String, FieldType)>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let content = if config_path.exists() {
         std::fs::read_to_string(config_path)?
@@ -6668,10 +6787,20 @@ fn upsert_channel_config(
         .and_then(|v| v.as_table_mut())
         .ok_or("channels is not a table")?;
 
-    // Build channel sub-table
+    // Build channel sub-table with correct TOML types
     let mut ch_table = toml::map::Map::new();
-    for (k, v) in fields {
-        ch_table.insert(k.clone(), toml::Value::String(v.clone()));
+    for (k, (v, ft)) in fields {
+        let toml_val = match ft {
+            FieldType::Number => {
+                if let Ok(n) = v.parse::<i64>() {
+                    toml::Value::Integer(n)
+                } else {
+                    toml::Value::String(v.clone())
+                }
+            }
+            _ => toml::Value::String(v.clone()),
+        };
+        ch_table.insert(k.clone(), toml_val);
     }
     channels_table.insert(channel_name.to_string(), toml::Value::Table(ch_table));
 
@@ -8666,7 +8795,9 @@ fn json_to_toml_value(value: &serde_json::Value) -> toml::Value {
     match value {
         serde_json::Value::String(s) => toml::Value::String(s.clone()),
         serde_json::Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
+            if let Some(i) = n.as_u64() {
+                toml::Value::Integer(i as i64)
+            } else if let Some(i) = n.as_i64() {
                 toml::Value::Integer(i)
             } else if let Some(f) = n.as_f64() {
                 toml::Value::Float(f)
