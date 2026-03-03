@@ -278,7 +278,91 @@ fn convert_messages(
         }
     }
 
+    let contents = sanitize_for_gemini(contents);
+
     (contents, system_instruction)
+}
+
+/// Sanitize a Gemini content list to satisfy API conversation structure rules.
+///
+/// Gemini enforces:
+/// 1. First turn must be `user`.
+/// 2. `model` turns with `functionCall` parts must be immediately preceded by a
+///    `user` turn (or a `user` turn with `functionResponse` parts).
+/// 3. No consecutive same-role turns.
+///
+/// Context trimming (drain from front) can violate these rules by removing a
+/// `user` turn that preceded a `model: [functionCall]`.  This pass fixes the
+/// result without touching the session history itself.
+fn sanitize_for_gemini(mut contents: Vec<GeminiContent>) -> Vec<GeminiContent> {
+    if contents.is_empty() {
+        return contents;
+    }
+
+    // Pass 1: drop orphaned functionCall/functionResponse pairs.
+    // A model turn with functionCall is "orphaned" when its immediate predecessor
+    // is also a model turn (or it is the very first turn).
+    // We must also drop the immediately following user turn that carries the
+    // matching functionResponse — otherwise Gemini rejects the dangling response.
+    let mut i = 0;
+    while i < contents.len() {
+        let is_model = contents[i].role.as_deref() == Some("model");
+        let has_fn_call = is_model
+            && contents[i]
+                .parts
+                .iter()
+                .any(|p| matches!(p, GeminiPart::FunctionCall { .. }));
+
+        if has_fn_call {
+            let preceding_is_user = i > 0 && contents[i - 1].role.as_deref() == Some("user");
+            if !preceding_is_user {
+                // Drop this model turn.
+                contents.remove(i);
+                // Also drop the immediately following user turn if it only has
+                // functionResponse parts (it is the paired response — now orphaned).
+                if i < contents.len() {
+                    let next_is_pure_response = contents[i].role.as_deref() == Some("user")
+                        && contents[i]
+                            .parts
+                            .iter()
+                            .all(|p| matches!(p, GeminiPart::FunctionResponse { .. }));
+                    if next_is_pure_response {
+                        contents.remove(i);
+                    }
+                }
+                // Re-examine the same index (it now holds the next element).
+                continue;
+            }
+        }
+        i += 1;
+    }
+
+    // Pass 2: merge consecutive same-role turns (can result from pass 1 removals).
+    let mut merged: Vec<GeminiContent> = Vec::with_capacity(contents.len());
+    for content in contents {
+        if let Some(last) = merged.last_mut() {
+            if last.role == content.role {
+                last.parts.extend(content.parts);
+                continue;
+            }
+        }
+        merged.push(content);
+    }
+
+    // Pass 3: ensure the first turn is `user`.
+    if merged.first().and_then(|c| c.role.as_deref()) != Some("user") {
+        merged.insert(
+            0,
+            GeminiContent {
+                role: Some("user".to_string()),
+                parts: vec![GeminiPart::Text {
+                    text: "(conversation continues)".to_string(),
+                }],
+            },
+        );
+    }
+
+    merged
 }
 
 /// Extract system prompt from messages or the explicit system field.
