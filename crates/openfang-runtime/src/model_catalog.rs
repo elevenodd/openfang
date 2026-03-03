@@ -115,6 +115,19 @@ impl ModelCatalog {
             .collect()
     }
 
+    /// Return the default model ID for a provider (first model in catalog order).
+    pub fn default_model_for_provider(&self, provider: &str) -> Option<String> {
+        // Check aliases first — e.g. "minimax" alias resolves to "MiniMax-M2.5"
+        if let Some(model_id) = self.aliases.get(provider) {
+            return Some(model_id.clone());
+        }
+        // Fall back to the first model registered for this provider
+        self.models
+            .iter()
+            .find(|m| m.provider == provider)
+            .map(|m| m.id.clone())
+    }
+
     /// List models that are available (from configured providers only).
     pub fn available_models(&self) -> Vec<&ModelCatalogEntry> {
         let configured: Vec<&str> = self
@@ -634,8 +647,8 @@ fn builtin_aliases() -> HashMap<String, String> {
         ("gpt4-mini", "gpt-4o-mini"),
         ("gpt5", "gpt-5.2"),
         ("gpt5-mini", "gpt-5-mini"),
-        ("flash", "gemini-3-flash"),
-        ("gemini-flash", "gemini-3-flash"),
+        ("flash", "gemini-2.5-flash"),
+        ("gemini-flash", "gemini-2.5-flash"),
         ("gemini-pro", "gemini-3.1-pro"),
         ("deepseek", "deepseek-chat"),
         ("llama", "llama-3.3-70b-versatile"),
@@ -1039,20 +1052,7 @@ fn builtin_models() -> Vec<ModelCatalogEntry> {
             supports_streaming: true,
             aliases: vec!["gemini-pro".into()],
         },
-        ModelCatalogEntry {
-            id: "gemini-3-flash".into(),
-            display_name: "Gemini 3 Flash".into(),
-            provider: "gemini".into(),
-            tier: ModelTier::Smart,
-            context_window: 1_048_576,
-            max_output_tokens: 65_536,
-            input_cost_per_m: 0.50,
-            output_cost_per_m: 3.0,
-            supports_tools: true,
-            supports_vision: true,
-            supports_streaming: true,
-            aliases: vec!["flash".into(), "gemini-flash".into()],
-        },
+        // gemini-3-flash removed: model doesn't exist. Use gemini-2.5-flash instead.
         ModelCatalogEntry {
             id: "gemini-3-deep-think".into(),
             display_name: "Gemini 3 Deep Think".into(),
