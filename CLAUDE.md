@@ -6,6 +6,73 @@ OpenFang is an open-source Agent Operating System written in Rust (14 crates).
 - Default API: `http://127.0.0.1:4200`
 - CLI binary: `target/release/openfang.exe` (or `target/debug/openfang.exe`)
 
+## System Environment
+**OS:** Windows 11 Home | **Shell:** Git Bash (use Unix syntax) | **Python:** 3.13.12
+- Use `taskkill //PID <pid> //F` (double slashes in MSYS2/Git Bash)
+- Paths: forward slashes in commands, backslashes escaped in TOML (`C:\\path`)
+
+## BLOCKING REQUIREMENT: Context Management Before Troubleshooting
+
+**Before attempting ANY fix, troubleshooting, or debugging:**
+
+### Step 1: Check Official Documentation & Community Resources (MANDATORY)
+You MUST check these resources BEFORE writing any fix code:
+
+1. **Official Documentation:** https://www.openfang.sh/
+   - Architecture guides
+   - Configuration reference
+   - Known issues and solutions
+
+2. **GitHub Repository:** https://github.com/RightNow-AI/openfang
+   - Search Issues tab for similar problems
+   - Check closed PRs for fixes that may have been merged
+   - Review Discussions for community solutions
+
+### Step 2: Delegate Research to Exploration Agent
+**Use the Task tool with subagent_type="Explore"** to spawn a research agent:
+
+```python
+Task(
+    subagent_type="Explore",
+    description="Search for [issue] solution",
+    prompt="""Search for solutions to [specific error/issue]:
+    - GitHub Issues: https://github.com/RightNow-AI/openfang/issues
+    - Check closed PRs with fixes
+    - Review Discussions for workarounds
+    Provide working solutions with code examples."""
+)
+```
+
+The exploration agent will:
+- Search GitHub Issues for error messages or symptoms
+- Review closed/merged PRs related to the problem area
+- Check Discussions for community workarounds
+- Summarize findings with links to relevant issues/PRs
+
+**When to spawn exploration agent:**
+- Unknown errors or unexpected behavior
+- Configuration issues not documented in local files
+- Multi-component problems (API + kernel + runtime)
+- Performance or stability issues
+
+**When to read local files directly:**
+- Error message points to specific source file
+- Issue is clearly architecture-related (need to understand code flow)
+- Working on new feature (not debugging existing code)
+
+### Step 3: Read Local Source Context
+After checking external resources, read relevant source files:
+- Error stack traces point to specific files
+- Architecture documentation in `/docs` or crate-level `lib.rs` files
+- Related test files that show intended behavior
+
+### Why This Is Required
+**Problem:** Wasting days debugging issues that have known solutions in documentation or community discussions.
+
+**Example:** The exec_policy database caching issue (2 days) could have been found quickly by searching GitHub issues for "exec_policy" or "agent configuration not updating".
+
+**This is a BLOCKING requirement** — do not attempt fixes until you've completed Steps 1-2.
+
 ## Build & Verify Workflow
 After every feature implementation, run ALL THREE checks:
 ```bash
