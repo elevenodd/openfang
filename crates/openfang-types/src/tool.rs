@@ -1,6 +1,24 @@
 //! Tool definition and result types.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
+
+/// Default value for tool input: empty JSON object (not null).
+fn default_tool_input() -> serde_json::Value {
+    serde_json::Value::Object(serde_json::Map::new())
+}
+
+/// Deserialize tool input, coercing null to empty object.
+fn deserialize_tool_input<'de, D>(deserializer: D) -> Result<serde_json::Value, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    if value.is_null() {
+        Ok(serde_json::Value::Object(serde_json::Map::new()))
+    } else {
+        Ok(value)
+    }
+}
 
 /// Definition of a tool that an agent can use.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -20,7 +38,8 @@ pub struct ToolCall {
     pub id: String,
     /// Which tool to call.
     pub name: String,
-    /// The input parameters.
+    /// The input parameters (always a JSON object, never null).
+    #[serde(default = "default_tool_input", deserialize_with = "deserialize_tool_input")]
     pub input: serde_json::Value,
 }
 

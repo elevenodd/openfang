@@ -1,6 +1,25 @@
 //! LLM conversation message types.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
+
+/// Default value for tool_use input: empty JSON object (not null).
+fn default_tool_input() -> serde_json::Value {
+    serde_json::Value::Object(serde_json::Map::new())
+}
+
+/// Deserialize tool_use input, coercing null to empty object.
+/// Both Anthropic and Gemini APIs require tool_use.input to be a dictionary.
+fn deserialize_tool_input<'de, D>(deserializer: D) -> Result<serde_json::Value, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    if value.is_null() {
+        Ok(serde_json::Value::Object(serde_json::Map::new()))
+    } else {
+        Ok(value)
+    }
+}
 
 /// A message in an LLM conversation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -58,7 +77,8 @@ pub enum ContentBlock {
         id: String,
         /// The tool name.
         name: String,
-        /// The tool input parameters.
+        /// The tool input parameters (always a JSON object, never null).
+        #[serde(default = "default_tool_input", deserialize_with = "deserialize_tool_input")]
         input: serde_json::Value,
     },
     /// A tool result from executing a tool.

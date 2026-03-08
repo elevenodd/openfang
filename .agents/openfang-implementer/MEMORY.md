@@ -237,6 +237,78 @@ Current exec_policy.mode = 'Allowlist'
 3. Restarted daemon multiple times - still blocked
 4. Checked source code: exec_policy enforcement in tool_runner.rs lines 213-227
 5. Found kernel.rs lines 1008-1011: exec_policy inheritance ONLY happens on agent creation/restoration
+6. **Root Cause Discovered:** Philo was created BEFORE global exec_policy was set, exec_policy cached in SQLite database
+
+**Solution:**
+1. Stopped daemon (PID 89320)
+2. Deleted Philo agent from database: `DELETE FROM agents WHERE id = '6c6cc199-d525-4af1-92a5-1c40c90655a1'`
+3. Restarted daemon
+4. Recreated Philo agent via API with current agent.toml (new ID: 1af768fa-1dd4-4cec-85b9-8df423ad400a)
+5. New agent inherited exec_policy mode="full" from config at creation time
+
+**Result:**
+- Test command `python3 --version` executed successfully
+- Philo response: "The system is running Python 3.13.12"
+- No more exec_policy blocking errors
+- Document processing scripts now functional
+
+**Lesson Learned:** Agent configuration is cached in database at creation time. Config file changes don't automatically propagate to existing agents. Must delete and recreate agents to pick up new exec_policy settings.
+
+### Challenge 4: Model Name Discrepancies - Catalog Aliases vs Direct Names (Session 4)
+
+**Symptom:** Philo configured with `claude-sonnet-4.5` (from user) returned 404 error
+
+**Error Message:**
+```
+API error (404): model: claude-sonnet-4.5
+```
+
+**Root Cause:** Model names must match OpenFang's model catalog exactly. The catalog uses specific naming conventions:
+- Claude Sonnet 4.6: `claude-sonnet-4-6` (not 4.5)
+- Claude Haiku 4.5: `claude-haiku-4-5-20251001`
+- Gemini 2.5 Flash: `gemini-2.5-flash` (alias for gemini-2.0-flash)
+
+**Solution:**
+1. Checked model_catalog.rs for valid Claude model names
+2. Changed agent.toml: `model = "claude-sonnet-4-6"`
+3. Later upgraded to Haiku: `model = "claude-haiku-4-5-20251001"`
+
+**Lesson Learned:** Always verify model names against the model catalog before configuration. Use grep on model_catalog.rs to find exact model IDs.
+
+### Challenge 5: OpenFang Version Gap - 17 Releases Behind (Session 4)
+
+**Discovery:** Local installation at v0.3.7, upstream at v0.3.24 (17 versions behind)
+
+**Critical Fixes Missed:**
+- v0.3.17: Daemon startup after reboot, port TIME_WAIT resolution
+- v0.3.18: Session repair after overflow (Gemini conversation history fix!)
+- v0.3.23: Fallback model chains per agent (Claude → Gemini backup)
+
+**Update Process:**
+1. Created backup branch: `backup-pre-v0.3.24`
+2. Committed local changes: aa57baa
+3. Fetched upstream: 17 new tags (v0.3.8 through v0.3.24)
+4. Merged with --no-ff
+5. Resolved conflicts preserving critical local fixes (BLOCK_ONLY_HIGH safety)
+
+**Result:** Merged successfully to v0.3.24, build in progress
+
+**Lesson Learned:** Check upstream regularly for updates. The session overflow fix in v0.3.18 may resolve Gemini API issues experienced earlier.
+
+**Symptom:** Philo refusing to execute python3 commands despite exec_policy mode="full" in both global config.toml and agent.toml
+
+**Error Message:**
+```
+shell_exec blocked: Command 'python3' is not in the exec allowlist.
+Current exec_policy.mode = 'Allowlist'
+```
+
+**Investigation:**
+1. Verified global config.toml has `[exec_policy] mode = "full"` (line 28)
+2. Verified agent.toml has `[capabilities.exec_policy] mode = "full"` (line 67)
+3. Restarted daemon multiple times - still blocked
+4. Checked source code: exec_policy enforcement in tool_runner.rs lines 213-227
+5. Found kernel.rs lines 1008-1011: exec_policy inheritance ONLY happens on agent creation/restoration
 6. **Root Cause Discovered:** Philo was created BEFORE global exec_policy was set, exec_policy cached in SQLite database at ~/.openfang/data/openfang.db
 
 **Solution:**
@@ -264,9 +336,11 @@ Current exec_policy.mode = 'Allowlist'
 
 - User has already configured workspace MCP server pointing to `C:\AI_Work`
 - D drive path verified accessible: `ls "D:/TERRA_ESA_Assistant_Files"` succeeds
-- Current OpenFang version: v0.3.3
-- Target version: v0.3.7 (4 commits behind upstream/main)
-- Implementation timeline: ~3.5 hours total (1.25h technical, 2.25h documentation)
+- **Current OpenFang version: v0.3.24** (merged from v0.3.7, binary build pending)
+- Implementation timeline: ~8 hours total across 4 sessions
+- Philo agent cost per task: $0.007 (Claude Haiku 4.5)
+- Document processing tools: read_pdf.py, read_docx.py, create_docx.py (all working)
+- Email channel: Configured but disabled (needs EMAIL_USERNAME and EMAIL_PASSWORD in .env)
 
 ---
 
@@ -329,5 +403,116 @@ Current exec_policy.mode = 'Allowlist'
 
 ---
 
-**Last Updated:** 2026-03-04 00:15 (Session 3)
-**Next Session:** Complete Phase 3 end-to-end testing, then create documentation materials
+### Session 4: 2026-03-05 to 2026-03-06 19:50
+**Actions:**
+
+**OpenFang Version Update (v0.3.7 → v0.3.24):**
+- Checked for updates: Found 17 versions behind (v0.3.8 through v0.3.24)
+- Critical fixes in update: daemon startup (v0.3.17), session overflow repair (v0.3.18), fallback model chains (v0.3.23)
+- Backup created: branch `backup-pre-v0.3.24`, commit aa57baa
+- Merge executed: upstream/main to local main
+- Conflicts resolved:
+  - Cargo.lock → took upstream
+  - gemini.rs → preserved local BLOCK_ONLY_HIGH safety settings
+  - model_catalog.rs → took upstream (new models)
+- Merge commit: 2a64c5b
+- Build status: cargo build --workspace --lib completed (v0.3.24 crates), release binary build pending
+
+**Context Management Process:**
+- Added BLOCKING requirement to CLAUDE.md
+- Must check https://www.openfang.sh/ and GitHub before any fixes
+- Note: No "Explore" subagent tool exists; must use WebSearch/WebFetch/git instead
+
+**Philo Agent Major Upgrade:**
+- Model switched: gemini-2.5-flash → claude-haiku-4-5-20251001
+- Cost reduction: 95% ($0.127 → $0.007 per task)
+- System prompt optimized: 1200 → 800 characters
+- Configuration changes:
+  - Temperature: 0.4 → 0.6
+  - max_tokens: 16384 → 8192
+  - Budget: $2/hr → $0.50/hr, 500k → 300k tokens/hr
+- Added tools: file_move, file_delete
+- Added automation workflows to prompt:
+  - Email monitoring (pre-TERRA and post-TERRA)
+  - Document processing error handling
+  - Workflow orchestration guidance
+- Email channel configured in config.toml (commented out, needs credentials)
+- New Philo agent ID: 7441c704-5963-4803-b025-fca970f751df
+- Test successful: Created C:/AI_Work/philo_haiku_test.txt
+
+**API Configuration:**
+- ANTHROPIC_API_KEY added to ~/.openfang/.env
+- Daemon loads .env file at startup via dotenv::load_dotenv()
+
+**Phase 3 Status:**
+- Philo: Upgraded and tested ✅
+- Researcher: Working with gemini-2.5-flash
+- Drafter: Working with gemini-2.5-flash
+- End-to-end workflow testing: PENDING
+
+**Next Steps:**
+- Wait for v0.3.24 release binary build to complete
+- Test daemon with v0.3.24
+- Configure email credentials in .env (EMAIL_USERNAME, EMAIL_PASSWORD)
+- Test Philo automation workflows
+- Phase 4: Create customization roadmap
+- Phase 5: Create teaching materials
+
+**Status:** Phase 0 ✅ Phase 1 ✅ Phase 2 ✅ Phase 3 In Progress (Philo upgraded, workflow testing pending)
+
+---
+
+### Session 5: 2026-03-07 to 2026-03-08 00:42
+**Actions:**
+
+**tool_use null Input Bug Fix (code-complete, deployed):**
+- Root cause: serde_json::from_str().unwrap_or_default() returns Value::Null, not {}
+- Fixed 5 driver locations: anthropic.rs (x2), openai.rs (x3) -- unwrap_or(json!({}))
+- Added serde default for GeminiFunctionCallData.args in gemini.rs
+- Added defensive deserializer in message.rs and tool.rs (ContentBlock::ToolUse::input, ToolCall::input)
+- All checks passed: build, test, clippy
+- Release binary built and deployed
+
+**Email Automation (working):**
+- nationalenv.com email is Microsoft 365 (not GoDaddy) -- basic IMAP auth blocked
+- Pivoted to Outlook COM automation via win32com
+- Built C:\AI_Work\.scripts\fetch_outlook_emails.py:
+  - Supports --account for multi-account, --all-accounts for combined
+  - SMTP address resolution for Exchange DNs
+  - Signature image filtering, attachment saving
+  - Successfully fetched 20 real emails from Ralph's inbox
+
+**Scheduled Email Checks (deployed):**
+- OpenFang has built-in cron scheduler with tick loop (every 15s)
+- Two cron systems: /api/cron/jobs (auto-firing) and /api/schedules (manual only)
+- Created 2 cron jobs via /api/cron/jobs:
+  - email-check-nationalenv: every 7200s (2h), job ID 8043d0ca-1438-4cb2-9380-a1c1816897e7
+  - email-check-gabrielenv: every 7200s (2h), job ID cf825b94-da23-4a50-866f-ffff32bed57f
+- Both fire AgentTurn to Philo with instructions to fetch, triage, and log emails
+- Jobs persist to ~/.openfang/cron_jobs.json (survives daemon restart)
+- Auto-disable after 5 consecutive failures (safety)
+
+**Auto-Start on Login:**
+- Created C:\AI_Work\.scripts\start_openfang.bat -- starts daemon if not running
+- Created Windows Startup shortcut: %APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\OpenFang.lnk
+- Daemon starts automatically on login, cron jobs fire while laptop is open
+
+**Philo agent.toml Updated:**
+- Added EMAIL TRIAGE section with fetch_outlook_emails.py instructions
+- Documented both accounts (nationalenv.com, gabrielenv.com)
+- Added all script flags including --account and --all-accounts
+- Current Philo ID: 7441c704-5963-4803-b025-fca970f751df
+
+**Files Created/Modified:**
+- C:\AI_Work\.scripts\fetch_outlook_emails.py -- Updated with --all-accounts flag
+- C:\AI_Work\.scripts\start_openfang.bat -- Daemon startup script
+- C:\AI_Work\.scripts\create_startup_shortcut.ps1 -- One-time shortcut creation
+- ~/.openfang/agents/philo/agent.toml -- Email triage instructions
+- ~/.openfang/cron_jobs.json -- Persisted cron jobs
+
+**Status:** Phase 0-2 Complete | Phase 3 In Progress (email automation working, scheduled checks active)
+
+---
+
+**Last Updated:** 2026-03-08 00:45 (Session 5)
+**Next Session:** Test scheduled cron job execution (wait for first auto-fire or restart daemon), Phase 4-5 documentation

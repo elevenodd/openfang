@@ -125,7 +125,12 @@ struct GeminiInlineData {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct GeminiFunctionCallData {
     name: String,
+    #[serde(default = "default_empty_object")]
     args: serde_json::Value,
+}
+
+fn default_empty_object() -> serde_json::Value {
+    serde_json::json!({})
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
